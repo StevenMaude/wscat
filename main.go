@@ -134,7 +134,9 @@ func ActionMain(ctx context.Context, c *cli.Command) error {
 				break
 			}
 		}
-		if err != nil && websocket.CloseStatus(err) == -1 {
+		status := websocket.CloseStatus(err)
+		if err != nil && err != io.EOF && status != websocket.StatusNormalClosure &&
+			status != websocket.StatusGoingAway {
 			log.Printf("Error copying to stdout: %v", err)
 		}
 		errc <- err
@@ -146,18 +148,15 @@ func ActionMain(ctx context.Context, c *cli.Command) error {
 			w   io.WriteCloser
 		)
 
-		for {
-			w, err = conn.Writer(ctx, websocket.MessageBinary)
-			if err != nil {
-				break
-			}
-			_, err = io.Copy(w, os.Stdin)
+		w, err = conn.Writer(ctx, websocket.MessageBinary)
+		if err == nil {
+			_, copyErr := io.Copy(w, os.Stdin)
 			closeErr := w.Close()
-			if err == nil {
+			if copyErr != nil {
+				err = copyErr
+			} else {
 				err = closeErr
 			}
-
-			break
 		}
 
 		if err != nil && err != io.EOF {
