@@ -11,7 +11,7 @@ import (
 	"os"
 	"regexp"
 
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 	"github.com/urfave/cli/v3"
 )
 
@@ -79,7 +79,7 @@ func MustParseURL(u string) *url.URL {
 	return tgt
 }
 
-func ActionMain(_ context.Context, c *cli.Command) error {
+func ActionMain(ctx context.Context, c *cli.Command) error {
 
 	args := c.Args()
 
@@ -105,14 +105,16 @@ func ActionMain(_ context.Context, c *cli.Command) error {
 		u.User = nil
 	}
 
-	conn, resp, err := websocket.DefaultDialer.Dial(u.String(), headers)
+	conn, resp, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{
+		HTTPHeader: headers,
+	})
 	if err != nil {
 		if resp != nil {
 			err = fmt.Errorf("%v: response: %v", err, resp.Status)
 		}
 		log.Fatalf("Error dialing: %v", err)
 	}
-	defer conn.Close()
+	defer conn.Close(websocket.StatusNormalClosure, "")
 
 	errc := make(chan error)
 
@@ -120,19 +122,19 @@ func ActionMain(_ context.Context, c *cli.Command) error {
 		// _, err := io.Copy(os.Stdout, conn)
 		var (
 			err error
-			r   io.Reader
+			msg []byte
 		)
 		for {
-			_, r, err = conn.NextReader()
+			_, msg, err = conn.Read(ctx)
 			if err != nil {
 				break
 			}
-			_, err = io.Copy(os.Stdout, r)
+			_, err = os.Stdout.Write(msg)
 			if err != nil {
 				break
 			}
 		}
-		if err != io.EOF {
+		if err != nil && websocket.CloseStatus(err) == -1 {
 			log.Printf("Error copying to stdout: %v", err)
 		}
 		errc <- err
@@ -141,17 +143,18 @@ func ActionMain(_ context.Context, c *cli.Command) error {
 	go func() {
 		var (
 			err error
-			w   io.Writer
+			w   io.WriteCloser
 		)
 
 		for {
-			w, err = conn.NextWriter(websocket.BinaryMessage)
+			w, err = conn.Writer(ctx, websocket.MessageBinary)
 			if err != nil {
 				break
 			}
 			_, err = io.Copy(w, os.Stdin)
-			if err != nil {
-				break
+			closeErr := w.Close()
+			if err == nil {
+				err = closeErr
 			}
 
 			break
